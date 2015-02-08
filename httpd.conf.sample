@@ -1,0 +1,127 @@
+# load modules
+LoadModule ssl_module modules/mod_ssl.so
+LoadModule wsgi_module modules/mod_wsgi.so
+LoadModule dbd_module modules/mod_dbd.so
+LoadModule authn_dbd_module modules/mod_authn_dbd.so
+LoadModule ldap_module modules/mod_ldap.so
+LoadModule authnz_ldap_module modules/mod_authnz_ldap.so
+
+#  SSL Global Context
+#  All SSL configuration in this context applies both to
+#  the main server and all SSL-enabled virtual hosts.
+Listen 443
+SSLCipherSuite HIGH:MEDIUM:!aNULL:!MD5
+SSLPassPhraseDialog  builtin
+SSLSessionCacheTimeout  300
+
+# set Python Path for WSGI
+WSGIPythonPath /tmp/Registry-Rubber
+
+# http -> HTTPS vhost
+<VirtualHost *:80>
+    ServerName private_registry 
+    ServerAlias private_registry.* registry_rubber registry_rubber.*
+    DirectoryIndex index.html
+    DocumentRoot "/usr/local/apache2/htdocs"
+
+    #Rewrites everything to https
+    RewriteEngine on
+    RewriteRule ^/?(.*)                      https://%{SERVER_NAME}/$1 [R=301,L]
+</VirtualHost>
+
+# docker registry proxy #
+<VirtualHost *:443>
+    ServerName private_registry
+    ServerAlias private_registry.*
+    DirectoryIndex index.html
+    DocumentRoot "/usr/local/apache2/htdocs"
+
+    # Logging
+    LogFormat "%h %l %u %t \"%{X-Forwarded-For}i\" - \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" private_registry
+    ErrorLog "logs/private_registry-error_log"
+    CustomLog "logs/private_registry-access_log" private_registry
+
+    # basic auth DB parameters
+    DBDriver        sqlite3
+    DBDParams       "/tmp/registry_rubber.sqlite"
+    DBDMin          1
+    DBDKeep         2
+    DBDMax          2
+    DBDPersist      On
+
+    # docker registry proxy settings
+    <Proxy balancer://private_registry>
+        BalancerMember http://127.0.0.1:5000/ retry=5 connectiontimeout=5
+    </Proxy>
+    ProxyPass / balancer://private_registry/ failonstatus=500
+    ProxyPassReverse / balancer:/private_registry/
+    ProxyPreserveHost on
+    ProxyTimeout 30
+
+    # everyone can access /v1/_ping
+    <ProxyMatch ^/v1/_ping$>
+        Satisfy Any
+        Require ip 10.0.0.0/8
+        Require ip 192.168.0.0/16
+    </ProxyMatch>
+
+    # restrict actual registry access
+    <ProxyMatch /v1/[a-z0-9].*>
+        Satisfy             All
+        AuthName            "registry-users auth"
+        AuthType            "Basic"
+        AuthBasicProvider   dbd
+        AuthDBDUserPWQuery  "SELECT password FROM users WHERE username = %s"
+        Order               deny,allow
+        Require             valid-user
+    </ProxyMatch>
+
+    # SSL config
+    SSLEngine on
+    SSLCertificateFile      /usr/local/apache2/certs/local.crt
+    SSLCertificateKeyFile   /usr/local/apache2/certs/local.key
+    SSLCertificateChainFile /usr/local/apache2/certs/bundle.crt
+</VirtualHost>
+
+
+# registry_rubber api
+<VirtualHost *:443>
+    ServerName registry_rubber
+    ServerAlias registry_rubber.*
+    DirectoryIndex index.html
+    DocumentRoot "/usr/local/apache2/htdocs"
+
+    # Logging
+    LogFormat "%h %l %u %t \"%{X-Forwarded-For}i\" - \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" registry_rubber
+    ErrorLog "logs/registry_rubber-users-error_log"
+    CustomLog "logs/registry_rubber-users-access_log" registry_rubber
+
+    # restrict registry_rubber access
+    <Directory /tmp/Registry-Rubber/>
+
+        # Enable SSL cert based auth?
+        #SSLCACertificateFile /usr/local/apache2/certs/ca.pem
+        #SSLVerifyClient     require
+        #SSLVerifyDepth      2
+        #SSLOptions          +FakeBasicAuth
+        #SSLRequireSSL
+        # require the issuer to be our Ops Docker Registry Intermediate CA
+        # and require the client cert CN to be xxx.yyy.com
+        #SSLRequire          %{SSL_CLIENT_I_DN_OU} in {"Ops Docker Registry Intermediate CA"} \
+        #                and %{SSL_CLIENT_S_DN_CN} in {"xxx.yyy.com"}
+
+
+        # Add ip whitelisting?
+        Require             ip 192.168.0.0/16
+        Require             local
+    </Directory>
+
+    # set WSGI script for registry_rubber
+    WSGIScriptAlias / /tmp/Registry-Rubber/registry_rubber.wsgi 
+
+    # SSL config
+    SSLEngine on
+    SSLCertificateFile      /usr/local/apache2/certs/local.crt
+    SSLCertificateKeyFile   /usr/local/apache2/certs/local.key
+    SSLCertificateChainFile /usr/local/apache2/certs/bundle.crt
+</VirtualHost>
