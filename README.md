@@ -48,6 +48,7 @@ Sqlite Or MySQL - Sqlite for single deployments, MySQL for active/active registr
 - user|password|db|port|host - MySQL Database Info (MySQL setup)
 - "storage_eng": (sqlite3|mysql) - determines backend storage engine to use 
 - "hash_type": (SHA1|md5) - determines basic authentication hash type.   see: http://httpd.apache.org/docs/2.4/misc/password_encryptions.html
+
 ##### httpd.conf.sample - Sample HTTPD configuration.
 - Redirects all http -> https
 - "private_registry" virtualhost setup to proxy requests to a private docker registry
